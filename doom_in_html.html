@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mini Doom (HTML5 Raycaster)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html,body{height:100%;margin:0;background:#000;color:#fff;font-family:system-ui,Arial}
+  #game{display:block;margin:0 auto;box-shadow:0 6px 30px rgba(0,0,0,0.7);}
+  #hud{width:800px;margin:8px auto;text-align:center}
+  .kbd{display:inline-block;padding:6px 10px;background:#222;border-radius:6px;margin:0 6px}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="450"></canvas>
+<div id="hud">
+  <div>Mini "Doom"-style raycaster. Controls: <span class="kbd">W/S</span> forward/back, <span class="kbd">A/D</span> strafe, <span class="kbd">←/→</span> rotate, <span class="kbd">Space</span> sprint, click to shoot.</div>
+  <div style="margin-top:6px">Kill the red enemy in the map. Hits: <span id="hits">0</span></div>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // simple square map (1 = wall, 0 = empty)
+  const MAP = [
+    1,1,1,1,1,1,1,1,1,1,
+    1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,1,0,0,0,1,
+    1,0,0,0,0,1,0,0,0,1,
+    1,0,0,0,0,1,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,1,
+    1,1,1,1,1,1,1,1,1,1,
+  ];
+  const MAPW = 10, MAPH = 10;
+
+  function mapAt(x,y){
+    if(x<0||y<0||x>=MAPW||y>=MAPH) return 1;
+    return MAP[y*MAPW + x];
+  }
+
+  // player
+  const player = {x:3.5, y:5.5, ang:0, height:0.5};
+  let keys = {};
+  let hits = 0;
+  document.getElementById('hits').textContent = hits;
+
+  // enemy sprite
+  const enemy = {x:7.2, y:3.6, alive:true};
+
+  // settings
+  const FOV = Math.PI/3; // 60deg
+  const NUM_RAYS = W; // one per pixel column
+  const MAX_DIST = 20;
+
+  // input
+  window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+  window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+  canvas.addEventListener('click', e => shoot());
+
+  function shoot(){
+    // cast a single ray from center of FOV
+    const rayAng = player.ang;
+    const hit = castRay(rayAng);
+    if(!enemy.alive) return;
+    if(hit && hit.hitSprite){
+      enemy.alive = false;
+      hits++;
+      document.getElementById('hits').textContent = hits;
+    }
+  }
+
+  function castRay(rayAng){
+    // DDA raycasting
+    const sin = Math.sin(rayAng), cos = Math.cos(rayAng);
+    let dist = 0;
+    const step = 0.02;
+    let hit = false, hx=0, hy=0, side=0;
+    for(let t=0; t<MAX_DIST; t+=step){
+      const rx = player.x + cos*t, ry = player.y + sin*t;
+      if(mapAt(Math.floor(rx), Math.floor(ry))===1){ hit=true; hx=rx; hy=ry; dist=t; break; }
+      // check sprite collision (simple radius test)
+      if(enemy.alive){
+        const dx = rx - enemy.x, dy = ry - enemy.y;
+        if(Math.hypot(dx,dy) < 0.4){ return {dist:t, hitSprite:true}; }
+      }
+    }
+    if(hit) return {dist:dist, hitSprite:false, hx, hy, side};
+    return null;
+  }
+
+  function gameLoop(dt){
+    // input
+    const moveSpeed = (keys[' '] ? 4.5 : 2.2) * dt; // sprint when space
+    const rotSpeed = 2.5 * dt;
+    if(keys['arrowleft']) player.ang -= rotSpeed;
+    if(keys['arrowright']) player.ang += rotSpeed;
+    let dx=0, dy=0;
+    if(keys['w']) { dx += Math.cos(player.ang) * moveSpeed; dy += Math.sin(player.ang) * moveSpeed; }
+    if(keys['s']) { dx -= Math.cos(player.ang) * moveSpeed; dy -= Math.sin(player.ang) * moveSpeed; }
+    if(keys['a']) { dx += Math.cos(player.ang - Math.PI/2) * moveSpeed; dy += Math.sin(player.ang - Math.PI/2) * moveSpeed; }
+    if(keys['d']) { dx += Math.cos(player.ang + Math.PI/2) * moveSpeed; dy += Math.sin(player.ang + Math.PI/2) * moveSpeed; }
+    // collision simple
+    const tryX = player.x + dx; const tryY = player.y + dy;
+    if(mapAt(Math.floor(tryX), Math.floor(player.y))===0) player.x = tryX;
+    if(mapAt(Math.floor(player.x), Math.floor(tryY))===0) player.y = tryY;
+
+    // render
+    render();
+  }
+
+  function render(){
+    // sky and floor
+    ctx.fillStyle = '#6CA0FF'; ctx.fillRect(0,0,W,H/2);
+    ctx.fillStyle = '#555'; ctx.fillRect(0,H/2,W,H/2);
+
+    // for every vertical slice
+    for(let x=0;x<NUM_RAYS;x++){
+      const cameraX = 2*x/NUM_RAYS - 1; // -1..1
+      const rayAng = player.ang + cameraX * (FOV/2);
+      const r = castRay(rayAng);
+      if(!r){ continue; }
+      let perpendicularDist = r.dist * Math.cos(cameraX * (FOV/2));
+      const lineHeight = Math.min(H, (H / perpendicularDist) * 0.8);
+      const drawStart = Math.floor((H - lineHeight)/2);
+
+      // shade walls based on distance
+      let shade = 1 - Math.min(1, perpendicularDist / MAX_DIST);
+      let color;
+      if(r.hitSprite){ // sprite hit — draw small red marker on center column
+        color = `rgba(200,30,30,${Math.max(0.2,shade)})`;
+      } else {
+        color = `rgba(${Math.floor(200*shade)},${Math.floor(200*shade)},${Math.floor(200*shade)},1)`;
+      }
+      ctx.fillStyle = color;
+      ctx.fillRect(x, drawStart, 1, Math.max(1, lineHeight));
+
+      // optionally draw a simple sprite if visible (billboard)
+      if(enemy.alive){
+        // compute vector to sprite
+        const dx = enemy.x - player.x, dy = enemy.y - player.y;
+        const angToSprite = Math.atan2(dy,dx);
+        let relAng = angToSprite - player.ang;
+        // normalize -PI..PI
+        while(relAng > Math.PI) relAng -= Math.PI*2;
+        while(relAng < -Math.PI) relAng += Math.PI*2;
+        const inFov = Math.abs(relAng) < FOV/2;
+        if(inFov){
+          // distance
+          const dist = Math.hypot(dx,dy);
+          const spriteScreenX = Math.floor((0.5 + (relAng / FOV)) * NUM_RAYS);
+          const spriteHeight = Math.min(H, (H / dist) * 0.9);
+          const sprStart = Math.floor((H - spriteHeight)/2);
+          // draw small red rectangle as enemy
+          ctx.fillStyle = 'rgba(220,30,30,1)';
+          ctx.fillRect(spriteScreenX-8, sprStart, 16, spriteHeight);
+        }
+      }
+    }
+
+    // minimap
+    drawMiniMap();
+
+    // weapon (simple)
+    drawWeapon();
+  }
+
+  function drawMiniMap(){
+    const scale = 12;
+    const offX = 8, offY = H - (MAPH*scale) - 8;
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    for(let y=0;y<MAPH;y++) for(let x=0;x<MAPW;x++){
+      ctx.fillStyle = mapAt(x,y)?'#222':'#ddd';
+      ctx.fillRect(offX + x*scale, offY + y*scale, scale-1, scale-1);
+    }
+    // player
+    ctx.fillStyle = 'blue';
+    ctx.fillRect(offX + player.x*scale -2, offY + player.y*scale -2,4,4);
+    // enemy
+    if(enemy.alive){ ctx.fillStyle='red'; ctx.fillRect(offX + enemy.x*scale -2, offY + enemy.y*scale -2,4,4); }
+    ctx.restore();
+  }
+
+  function drawWeapon(){
+    // simple crosshair + lower-screen pistol
+    ctx.save();
+    ctx.translate(W/2, H - 40);
+    // pistol body
+    ctx.fillStyle = '#222'; ctx.fillRect(-40, -10, 80, 20);
+    ctx.fillStyle = '#666'; ctx.fillRect(-10, -18, 20, 8);
+    ctx.restore();
+    // crosshair
+    ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.6)'; ctx.moveTo(W/2-10,H/2); ctx.lineTo(W/2+10,H/2); ctx.moveTo(W/2,H/2-10); ctx.lineTo(W/2,H/2+10); ctx.stroke();
+  }
+
+  // game timing
+  let last = performance.now();
+  function frame(t){
+    const dt = Math.min(0.05, (t-last)/1000);
+    gameLoop(dt);
+    last = t;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
